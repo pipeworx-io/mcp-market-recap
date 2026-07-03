@@ -1,0 +1,18 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.pipeworx-io/market-recap",
+  "title": "Market Recap",
+  "description": "Market Recap MCP — a one-call 'what happened in markets' snapshot.",
+  "version": "0.1.0",
+  "websiteUrl": "https://pipeworx.io/packs/market-recap",
+  "repository": {
+    "url": "https://github.com/pipeworx-io/mcp-market-recap",
+    "source": "github"
+  },
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://gateway.pipeworx.io/market-recap/mcp"
+    }
+  ]
+}
