@@ -1,20 +1,32 @@
 {
   "name": "@pipeworx/mcp-market-recap",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Market Recap MCP — a one-call 'what happened in markets' snapshot.",
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",
+  "bin": {
+    "mcp-market-recap": "bin/cli.js"
+  },
   "keywords": ["mcp", "mcp-server", "model-context-protocol", "pipeworx", "market-recap"],
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/pipeworx-io/mcp-market-recap"
+    "url": "git+https://github.com/pipeworx-io/mcp-market-recap.git"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
   },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "tsx": "^4.19.0"
+  },
   "devDependencies": {
-    "typescript": "^5.7.0"
+    "typescript": "^5.9.3",
+    "@cloudflare/workers-types": "^4.20260405.1"
+  },
+  "pipeworx": {
+    "sourceHash": "v1-1d2d34c8b3ce175f1cbd2171c791df1f5de9cd9fde82c2d2ae65a7113d0c6721",
+    "sourceCommit": "adb69d997f82a62e8e22b594488c7d04a227db35"
   }
 }
