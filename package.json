@@ -1,6 +1,6 @@
 {
   "name": "@pipeworx/mcp-market-recap",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Market Recap MCP — a one-call 'what happened in markets' snapshot.",
   "type": "module",
   "main": "src/index.ts",
@@ -26,7 +26,7 @@
     "@cloudflare/workers-types": "^4.20260405.1"
   },
   "pipeworx": {
-    "sourceHash": "v1-1d2d34c8b3ce175f1cbd2171c791df1f5de9cd9fde82c2d2ae65a7113d0c6721",
-    "sourceCommit": "adb69d997f82a62e8e22b594488c7d04a227db35"
+    "sourceHash": "v1-83e26d233a26a8bd542918883ab1b304b93bf831c9cb8611599fbad1b2dec782",
+    "sourceCommit": "6182c4cfebddb94950e060b5d2fca18f18ad1aca"
   }
 }
