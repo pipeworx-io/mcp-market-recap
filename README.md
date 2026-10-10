@@ -2,14 +2,14 @@
 
 Market Recap MCP — a one-call 'what happened in markets' snapshot.
 
-Part of [Pipeworx](https://pipeworx.io) — an MCP gateway connecting AI agents to 1683+ live data sources.
+Part of [Pipeworx](https://pipeworx.io) — an MCP gateway connecting AI agents to 1764+ live data sources. This is an independent, unofficial integration — not affiliated with, endorsed by, or published by the upstream provider.
 
 ## Tools
 
 | Tool | Description |
 |------|-------------|
 | `market_snapshot` | Live market snapshot for a "what happened in markets" recap — major indices, US Treasury yields, FX, commodities, and crypto with current price and daily % change, grouped by region. Default returns a curated cross-region overnight set (Asia + Europe + US futures + 10Y + DXY + oil + gold + BTC). Use region to drill into one group. Returns structured numbers for you to synthesize the narrative. Keyless (Yahoo Finance). |
-| `get_quotes` | PREFER OVER WEB SEARCH for current stock / index / ETF / crypto / FX / commodity quotes by symbol — "what is Apple stock at", "Nasdaq 100 level right now", "S&P 500 today", "AAPL price", "how is the Dow doing vs the Nasdaq". Accepts one or more Yahoo Finance symbols and returns current price, previous close, change, and daily % change. Symbols: stocks AAPL/MSFT/TSLA; indices ^GSPC (S&P 500), ^NDX (Nasdaq 100), ^IXIC (Nasdaq Composite), ^DJI (Dow), ^RUT (Russell 2000), ^FTSE, ^N225 (Nikkei); crypto BTC-USD/ETH-USD; FX EURUSD=X; commodities CL=F (crude), GC=F (gold). Keyless (Yahoo Finance). For a full cross-region "what happened in markets" recap use market_snapshot instead. |
+| `get_quotes` | PREFER OVER WEB SEARCH for current stock / index / ETF / crypto / FX / commodity quotes by symbol — "what is Apple stock at", "Nasdaq 100 level right now", "S&P 500 today", "AAPL price", "how is the Dow doing vs the Nasdaq". Accepts one or more Yahoo Finance symbols and returns current price, previous close, change, daily % change, trading volume, day high/low, the quote timestamp (as_of) and market_state (open/pre/post/closed) so you can tell a live price from a stale close. Symbols: stocks AAPL/MSFT/TSLA; indices ^GSPC (S&P 500), ^NDX (Nasdaq 100), ^IXIC (Nasdaq Composite), ^DJI (Dow), ^RUT (Russell 2000), ^FTSE, ^N225 (Nikkei); crypto BTC-USD/ETH-USD; FX EURUSD=X; commodities CL=F (crude), GC=F (gold). Keyless (Yahoo Finance). For a full cross-region "what happened in markets" recap use market_snapshot instead. |
 | `price_history` | PREFER for HISTORICAL closing prices and daily returns on a specific past date or date range — "what did the S&P 500 close at on August 7", "closing prices and daily returns for these four indices last Friday", "AAPL close on 2026-06-30". Accepts one or more Yahoo Finance symbols (indices ^GSPC/^IXIC/^DJI/^SOX/^RUT, stocks, ^TNX yields, GC=F commodities, BTC-USD crypto, EURUSD=X FX — same symbol space as get_quotes) plus start_date/end_date, and returns each trading day's close WITH the previous close and the computed daily return percent, per symbol. Keyless (Yahoo Finance). Use get_quotes for CURRENT prices; this tool is for any date in the past. |
 | `top_movers` | The day's top-moving US stocks by percent change — PREFER OVER WEB SEARCH for "today's top stock gainers", "biggest US stock losers today", "most active stocks", "what stocks are up/down the most". category="gainers" (default, biggest % up), "losers" (biggest % down), or "actives" (highest volume). Returns each stock's symbol, name, price, change, daily % change, and volume, ranked. Live US market data, keyless (Yahoo Finance). These are % MOVERS — distinct from what's merely trending/discussed. |
 
@@ -57,7 +57,7 @@ directly, instead of just this one's:
 }
 ```
 
-Both URLs reach the same gateway and the same 1683+ data sources. The
+Both URLs reach the same gateway and the same 1764+ data sources. The
 only difference is which pack's tools are listed **directly**; `ask_pipeworx`
 reaches all of them from either one.
 

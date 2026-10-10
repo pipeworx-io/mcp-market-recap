@@ -793,7 +793,7 @@ const tools: McpToolExport['tools'] = [
   {
     name: 'get_quotes',
     description:
-      'PREFER OVER WEB SEARCH for current stock / index / ETF / crypto / FX / commodity quotes by symbol — "what is Apple stock at", "Nasdaq 100 level right now", "S&P 500 today", "AAPL price", "how is the Dow doing vs the Nasdaq". Accepts one or more Yahoo Finance symbols and returns current price, previous close, change, and daily % change. Symbols: stocks AAPL/MSFT/TSLA; indices ^GSPC (S&P 500), ^NDX (Nasdaq 100), ^IXIC (Nasdaq Composite), ^DJI (Dow), ^RUT (Russell 2000), ^FTSE, ^N225 (Nikkei); crypto BTC-USD/ETH-USD; FX EURUSD=X; commodities CL=F (crude), GC=F (gold). Keyless (Yahoo Finance). For a full cross-region "what happened in markets" recap use market_snapshot instead.',
+      'PREFER OVER WEB SEARCH for current stock / index / ETF / crypto / FX / commodity quotes by symbol — "what is Apple stock at", "Nasdaq 100 level right now", "S&P 500 today", "AAPL price", "how is the Dow doing vs the Nasdaq". Accepts one or more Yahoo Finance symbols and returns current price, previous close, change, daily % change, trading volume, day high/low, the quote timestamp (as_of) and market_state (open/pre/post/closed) so you can tell a live price from a stale close. Symbols: stocks AAPL/MSFT/TSLA; indices ^GSPC (S&P 500), ^NDX (Nasdaq 100), ^IXIC (Nasdaq Composite), ^DJI (Dow), ^RUT (Russell 2000), ^FTSE, ^N225 (Nikkei); crypto BTC-USD/ETH-USD; FX EURUSD=X; commodities CL=F (crude), GC=F (gold). Keyless (Yahoo Finance). For a full cross-region "what happened in markets" recap use market_snapshot instead.',
     summary: 'Current prices for stocks, indices, ETFs, crypto, FX and commodities by symbol.',
     inputSchema: {
       type: 'object',
@@ -818,7 +818,7 @@ const tools: McpToolExport['tools'] = [
         symbols: {
           type: ['string', 'array'],
           items: { type: 'string' },
-          description: 'One or more Yahoo Finance symbols, e.g. "^GSPC" or ["^GSPC","^IXIC","^DJI","^SOX"]. Comma-separated string also accepted. Up to 8.',
+          description: 'One or more Yahoo Finance symbols, e.g. "^GSPC" or ["^GSPC","^IXIC","^DJI","^SOX"]. Comma-separated string also accepted. Up to 40 per call — symbols beyond that come back in "dropped_symbols", never silently.',
         },
         start_date: { type: 'string', description: 'First date wanted, YYYY-MM-DD. For a single day, set start_date = end_date — the previous close and daily return for that day are included automatically.' },
         end_date: { type: 'string', description: 'Last date wanted, YYYY-MM-DD. Defaults to start_date.' },
@@ -851,6 +851,18 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
 }
 
 const CHART = 'https://query1.finance.yahoo.com/v8/finance/chart';
+// /chart has no batch endpoint (unlike /spark's SPARK_MAX=20) — it is one
+// upstream fetch per symbol. The old code capped the INPUT at 8 and silently
+// dropped the rest, reporting `requested: 8` even when the caller asked for
+// 18 (fleet #2909 — 11 judged misses, this bug the common one: a plausible
+// 200 that never says 10 symbols vanished). There is no real vendor limit
+// here, so CHART_MAX is a generosity cap against pathological input (a
+// 500-symbol list), not a batching limit — raise it rather than silently
+// truncating. CHART_CHUNK bounds how many of those fetches run concurrently
+// per call, so we fan out politely rather than firing 40 requests at Yahoo
+// at once.
+const CHART_MAX = 40; // matches get_quotes' cap; generous enough that no real question hits it
+const CHART_CHUNK = 8; // concurrency per batch, not a count cap
 
 /**
  * Why ONE symbol is missing, in words the caller can act on.
@@ -902,6 +914,24 @@ export function priceHistoryMissReason(
   return `We could not price "${sym}" right now: the lookup failed before any data came back (${why}). This is a transient fetch failure, not a missing symbol — retry shortly.`;
 }
 
+/**
+ * Split a requested symbol list into the ones this call will actually fetch
+ * and the ones it will not, against a hard per-call cap.
+ *
+ * Pulled out so the no-silent-truncation behaviour is testable without the
+ * network: the bug this exists to prevent (fleet #2909) was `requested`
+ * silently reporting the CAPPED count instead of what was actually asked
+ * for, with the overflow symbols simply gone from the response. `served`
+ * always reflects the real cap, `requested` always reflects the real ask,
+ * and every overflow symbol is named in `dropped` rather than disappearing.
+ */
+export function splitPriceHistorySymbols(
+  requested: string[],
+  max: number,
+): { served: string[]; dropped: string[] } {
+  return { served: requested.slice(0, max), dropped: requested.slice(max) };
+}
+
 // Historical daily closes + computed daily returns, per symbol, from Yahoo's
 // keyless v8 chart endpoint. Exists because "closing prices and daily returns
 // for four indices on August 7" had NO servable tool: get_quotes is
@@ -910,11 +940,11 @@ export function priceHistoryMissReason(
 // week back so the previous trading close — required for the daily return —
 // is always present even across weekends and holidays.
 async function priceHistory(args: Record<string, unknown>): Promise<unknown> {
-  const list = (Array.isArray(args.symbols) ? args.symbols : String(args.symbols ?? '').split(','))
+  const requested = (Array.isArray(args.symbols) ? args.symbols : String(args.symbols ?? '').split(','))
     .map((s) => String(s).trim().toUpperCase())
-    .filter(Boolean)
-    .slice(0, 8);
-  if (list.length === 0) throw new Error('Pass one or more Yahoo Finance symbols, e.g. {symbols: ["^GSPC","^IXIC"], start_date: "2026-08-07"}.');
+    .filter(Boolean);
+  if (requested.length === 0) throw new Error('Pass one or more Yahoo Finance symbols, e.g. {symbols: ["^GSPC","^IXIC"], start_date: "2026-08-07"}.');
+  const { served: list, dropped } = splitPriceHistorySymbols(requested, CHART_MAX);
   const startStr = String(args.start_date ?? '').trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(startStr)) throw new Error('start_date must be YYYY-MM-DD, e.g. "2026-08-07".');
   const endStr = String(args.end_date ?? startStr).trim();
@@ -927,44 +957,61 @@ async function priceHistory(args: Record<string, unknown>): Promise<unknown> {
   const period1 = Math.floor(startMs / 1000) - 7 * 86400;
   const period2 = Math.floor(endMs / 1000) + 86400 + 86400;
 
-  const results = await Promise.all(list.map(async (symbol) => {
-    try {
-      const url = `${CHART}/${encodeURIComponent(symbol)}?period1=${period1}&period2=${period2}&interval=1d&events=history`;
-      const controller = new AbortController();
-      const t = setTimeout(() => controller.abort(), 15_000);
-      let res: Response;
+  // /chart has no batch endpoint, so every symbol is its own upstream fetch.
+  // Fan out in CHART_CHUNK-sized batches, sequentially, rather than firing
+  // `list.length` concurrent requests at Yahoo at once — list.length can now
+  // be up to CHART_MAX (was hard-capped at 8, which is what dropped symbols
+  // 9+ silently; see splitPriceHistorySymbols above for the honest version
+  // of that cap).
+  const results: { symbol: string; found: boolean; error?: string; currency?: string | null; exchange?: string | null; days?: unknown }[] = [];
+  for (let i = 0; i < list.length; i += CHART_CHUNK) {
+    const chunk = list.slice(i, i + CHART_CHUNK);
+    const chunkResults = await Promise.all(chunk.map(async (symbol) => {
       try {
-        res = await fetch(url, { headers: { 'User-Agent': UA, Accept: 'application/json' }, signal: controller.signal });
-      } finally { clearTimeout(t); }
-      if (!res.ok) return { symbol, found: false, error: priceHistoryMissReason(symbol, 'http', res.status) };
-      const data = await res.json() as { chart?: { result?: { meta?: { currency?: string; exchangeName?: string; symbol?: string }; timestamp?: number[]; indicators?: { quote?: { close?: (number | null)[] }[] } }[]; error?: { description?: string } } };
-      const r = data.chart?.result?.[0];
-      if (!r?.timestamp?.length) return { symbol, found: false, error: priceHistoryMissReason(symbol, 'empty', data.chart?.error?.description) };
-      const closes = r.indicators?.quote?.[0]?.close ?? [];
-      // Collapse to (date, close) pairs — the bar timestamp is market open in
-      // exchange-local time; the UTC date of that instant is the trading date.
-      const bars: { date: string; close: number }[] = [];
-      for (let i = 0; i < r.timestamp.length; i++) {
-        const c = closes[i];
-        if (c == null) continue;
-        bars.push({ date: new Date(r.timestamp[i] * 1000).toISOString().slice(0, 10), close: c });
+        const url = `${CHART}/${encodeURIComponent(symbol)}?period1=${period1}&period2=${period2}&interval=1d&events=history`;
+        const controller = new AbortController();
+        const t = setTimeout(() => controller.abort(), 15_000);
+        let res: Response;
+        try {
+          res = await fetch(url, { headers: { 'User-Agent': UA, Accept: 'application/json' }, signal: controller.signal });
+        } finally { clearTimeout(t); }
+        if (!res.ok) return { symbol, found: false, error: priceHistoryMissReason(symbol, 'http', res.status) };
+        const data = await res.json() as { chart?: { result?: { meta?: { currency?: string; exchangeName?: string; symbol?: string }; timestamp?: number[]; indicators?: { quote?: { close?: (number | null)[] }[] } }[]; error?: { description?: string } } };
+        const r = data.chart?.result?.[0];
+        if (!r?.timestamp?.length) return { symbol, found: false, error: priceHistoryMissReason(symbol, 'empty', data.chart?.error?.description) };
+        const closes = r.indicators?.quote?.[0]?.close ?? [];
+        // Collapse to (date, close) pairs — the bar timestamp is market open in
+        // exchange-local time; the UTC date of that instant is the trading date.
+        const bars: { date: string; close: number }[] = [];
+        for (let j = 0; j < r.timestamp.length; j++) {
+          const c = closes[j];
+          if (c == null) continue;
+          bars.push({ date: new Date(r.timestamp[j] * 1000).toISOString().slice(0, 10), close: c });
+        }
+        const days = bars
+          .map((b, j) => ({
+            date: b.date,
+            close: Number(b.close.toFixed(4)),
+            previous_close: j > 0 ? Number(bars[j - 1].close.toFixed(4)) : null,
+            daily_return_pct: j > 0 && bars[j - 1].close !== 0
+              ? Number(((b.close / bars[j - 1].close - 1) * 100).toFixed(3))
+              : null,
+          }))
+          .filter((d) => d.date >= startStr && d.date <= endStr);
+        if (days.length === 0) return { symbol, found: false, error: priceHistoryMissReason(symbol, 'no-trading-days', `${startStr} to ${endStr}`) + ` Nearest earlier close the source returned: ${bars.at(-1)?.date ?? 'none'}.` };
+        return { symbol, found: true, currency: r.meta?.currency ?? null, exchange: r.meta?.exchangeName ?? null, days };
+      } catch (e) {
+        return { symbol, found: false, error: priceHistoryMissReason(symbol, 'thrown', (e as Error).message) };
       }
-      const days = bars
-        .map((b, i) => ({
-          date: b.date,
-          close: Number(b.close.toFixed(4)),
-          previous_close: i > 0 ? Number(bars[i - 1].close.toFixed(4)) : null,
-          daily_return_pct: i > 0 && bars[i - 1].close !== 0
-            ? Number(((b.close / bars[i - 1].close - 1) * 100).toFixed(3))
-            : null,
-        }))
-        .filter((d) => d.date >= startStr && d.date <= endStr);
-      if (days.length === 0) return { symbol, found: false, error: priceHistoryMissReason(symbol, 'no-trading-days', `${startStr} to ${endStr}`) + ` Nearest earlier close the source returned: ${bars.at(-1)?.date ?? 'none'}.` };
-      return { symbol, found: true, currency: r.meta?.currency ?? null, exchange: r.meta?.exchangeName ?? null, days };
-    } catch (e) {
-      return { symbol, found: false, error: priceHistoryMissReason(symbol, 'thrown', (e as Error).message) };
-    }
-  }));
+    }));
+    results.push(...chunkResults);
+  }
+
+  // Overflow symbols past CHART_MAX were never fetched — say so by name,
+  // the same way a genuine vendor miss is named, rather than letting them
+  // vanish between `requested` and the results array (fleet #2909).
+  const droppedReason = `price_history serves up to ${CHART_MAX} symbols per call; this call asked for ${requested.length}. Call price_history again with just the symbols listed in "dropped_symbols".`;
+  for (const symbol of dropped) results.push({ symbol, found: false, error: droppedReason });
 
   // Say the partial part OUT LOUD. `requested` vs `lookups` already implied it,
   // but implying it means the caller has to diff two arrays to notice — and the
@@ -978,15 +1025,21 @@ async function priceHistory(args: Record<string, unknown>): Promise<unknown> {
   return {
     start_date: startStr,
     end_date: endStr,
-    requested: list.length,
+    // Always the actual ask — never the capped/served count. This is the
+    // field fleet #2909 was filed over: it used to read `requested: 8` when
+    // 18 symbols were asked for, which is indistinguishable from "you only
+    // asked for 8".
+    requested: requested.length,
+    served: list.length,
     // One underlying data request per symbol — the billing lane's per-lookup
     // metering signal (same rule as ask_pipeworx's billable_lookups).
     lookups: results.filter((r) => r.found).length,
+    ...(dropped.length ? { dropped_symbols: dropped, dropped_note: droppedReason } : {}),
     ...(missing.length
       ? {
           partial: true,
           missing,
-          partial_note: `Answered ${list.length - missing.length} of the ${list.length} symbols asked for. The rest are listed in "missing" with the reason each one could not be priced — report those as named gaps. Do NOT drop them silently and do NOT substitute a different symbol.`,
+          partial_note: `Answered ${requested.length - missing.length} of the ${requested.length} symbols asked for. The rest are listed in "missing" with the reason each one could not be priced — report those as named gaps. Do NOT drop them silently and do NOT substitute a different symbol.`,
         }
       : {}),
     results,
@@ -1010,12 +1063,84 @@ async function getQuotes(rawSymbols: unknown): Promise<unknown> {
     const prev = q?.previous_close ?? null;
     const change = price != null && prev != null ? Number((price - prev).toFixed(4)) : null;
     const change_pct = price != null && prev ? Number((((price - prev) / prev) * 100).toFixed(2)) : null;
-    return { symbol, price, previous_close: prev, change, change_pct, found: q != null && price != null };
+    const found = q != null && price != null;
+    const row = {
+      symbol,
+      name: q?.name ?? null,
+      price,
+      previous_close: prev,
+      change,
+      change_pct,
+      volume: q?.volume ?? null,
+      day_high: q?.day_high ?? null,
+      day_low: q?.day_low ?? null,
+      currency: q?.currency ?? null,
+      exchange: q?.exchange ?? null,
+      as_of: q?.as_of ?? null,
+      market_state: q?.market_state ?? null,
+      found,
+    };
+    // Fleet #2908: a quote with no volume and no timestamp cannot be told apart
+    // from a stale close, and the judge marked 11 answers down for exactly
+    // that. Every field is always present; when the source has no value we say
+    // which, rather than leaving the caller to notice an absence.
+    const missing_fields = found
+      ? (['volume', 'as_of', 'market_state'] as const).filter((k) => row[k] == null)
+      : [];
+    return missing_fields.length
+      ? {
+          ...row,
+          missing_fields,
+          missing_note: `Yahoo Finance did not supply ${missing_fields.join(', ')} for "${symbol}".`
+            + (missing_fields.includes('volume') && q?.instrument_type && !['EQUITY', 'ETF', 'MUTUALFUND'].includes(q.instrument_type)
+              ? ` ${q.instrument_type} quotes (indices, yields, FX) have no traded volume.`
+              : ''),
+        }
+      : row;
   });
-  return { requested: list.length, found: results.filter((r) => r.found).length, quotes: results };
+  return {
+    requested: list.length,
+    found: results.filter((r) => r.found).length,
+    retrieved_at: new Date().toISOString(),
+    quotes: results,
+    source: 'Yahoo Finance (keyless)',
+    note: 'as_of is the time of the last trade the price reflects. market_state "open" means the regular session is live; "pre"/"post" mean extended hours, where price is still the regular-session price; "closed" means price is the last close.',
+  };
 }
 
-interface Quote { price: number | null; previous_close: number | null }
+interface TradingPeriod { start?: number; end?: number }
+
+/**
+ * Which session the exchange is in at `nowSec`, from Yahoo's currentTradingPeriod.
+ * Returns null when the periods are absent so the caller reports it as missing
+ * rather than guessing "closed". Pure, so it is testable without the network.
+ */
+export function marketState(
+  periods: { pre?: TradingPeriod; regular?: TradingPeriod; post?: TradingPeriod } | undefined,
+  nowSec: number,
+): 'open' | 'pre' | 'post' | 'closed' | null {
+  const reg = periods?.regular;
+  if (reg?.start == null || reg?.end == null) return null;
+  const within = (p?: TradingPeriod) => p?.start != null && p?.end != null && p.end > p.start && nowSec >= p.start && nowSec < p.end;
+  if (within(reg)) return 'open';
+  if (within(periods?.pre)) return 'pre';
+  if (within(periods?.post)) return 'post';
+  return 'closed';
+}
+
+interface Quote {
+  price: number | null;
+  previous_close: number | null;
+  name?: string | null;
+  volume?: number | null;
+  day_high?: number | null;
+  day_low?: number | null;
+  currency?: string | null;
+  exchange?: string | null;
+  instrument_type?: string | null;
+  as_of?: string | null;
+  market_state?: 'open' | 'pre' | 'post' | 'closed' | null;
+}
 
 async function fetchSpark(symbols: string[]): Promise<Map<string, Quote>> {
   const out = new Map<string, Quote>();
@@ -1032,15 +1157,35 @@ async function fetchSpark(symbols: string[]): Promise<Map<string, Quote>> {
         const res = await fetch(url, { headers: { 'User-Agent': UA, Accept: 'application/json' }, signal: controller.signal });
         if (!res.ok) throw await httpError(res, 'Yahoo spark');
         const j = (await res.json()) as {
-          spark?: { result?: { symbol?: string; response?: { meta?: { symbol?: string; regularMarketPrice?: number; chartPreviousClose?: number; previousClose?: number } }[] }[] };
+          spark?: { result?: { symbol?: string; response?: { meta?: {
+            symbol?: string; regularMarketPrice?: number; chartPreviousClose?: number; previousClose?: number;
+            regularMarketVolume?: number; regularMarketTime?: number; regularMarketDayHigh?: number; regularMarketDayLow?: number;
+            currency?: string; fullExchangeName?: string; exchangeName?: string; instrumentType?: string; shortName?: string; longName?: string;
+            currentTradingPeriod?: { pre?: TradingPeriod; regular?: TradingPeriod; post?: TradingPeriod };
+          } }[] }[] };
         };
+        const nowSec = Math.floor(Date.now() / 1000);
+        const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
         for (const r of j.spark?.result ?? []) {
           const meta = r.response?.[0]?.meta;
           const sym = meta?.symbol ?? r.symbol;
           if (!sym) continue;
+          // Yahoo reports volume 0 for indices, yields and FX, which have no
+          // traded volume — 0 there means "not applicable", not "nothing traded".
+          const vol = num(meta?.regularMarketVolume);
+          const t = num(meta?.regularMarketTime);
           out.set(sym, {
             price: meta?.regularMarketPrice ?? null,
             previous_close: meta?.chartPreviousClose ?? meta?.previousClose ?? null,
+            name: meta?.longName ?? meta?.shortName ?? null,
+            volume: vol != null && vol > 0 ? vol : null,
+            day_high: num(meta?.regularMarketDayHigh),
+            day_low: num(meta?.regularMarketDayLow),
+            currency: meta?.currency ?? null,
+            exchange: meta?.fullExchangeName ?? meta?.exchangeName ?? null,
+            instrument_type: meta?.instrumentType ?? null,
+            as_of: t != null && t > 0 ? new Date(t * 1000).toISOString() : null,
+            market_state: marketState(meta?.currentTradingPeriod, nowSec),
           });
         }
       } finally {
