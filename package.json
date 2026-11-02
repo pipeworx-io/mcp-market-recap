@@ -1,6 +1,6 @@
 {
   "name": "@pipeworx/mcp-market-recap",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Market Recap MCP — a one-call 'what happened in markets' snapshot.",
   "type": "module",
   "main": "lib/index.js",
@@ -27,7 +27,7 @@
     "mode": "gateway",
     "slug": "market-recap",
     "gatewaySlug": "market-recap",
-    "sourceHash": "v1-a394b6a13ba8fa8953458966be8f6961d488b2032991ff93d22e78bdaa38c5be",
-    "sourceCommit": "5c89d6abb778d45da5d92002eb251978622bedf9"
+    "sourceHash": "v1-91c8abd4c5316d82c018125fdf8d53b71f4815a23f6f2fca2c6e5f2703c8ff6a",
+    "sourceCommit": "236b0a46d91f343fe094da9f499c378e88f78312"
   }
 }
